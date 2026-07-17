@@ -13,6 +13,8 @@ jobs:
       - name: Rozbalit projekt
         run: |
           unzip -o *.zip
+          rm -rf AI-FotoAsistent-S22-Ultra/gradle/wrapper
+          rm -f AI-FotoAsistent-S22-Ultra/gradlew AI-FotoAsistent-S22-Ultra/gradlew.bat
           ls -la AI-FotoAsistent-S22-Ultra
 
       - uses: actions/setup-java@v4
@@ -25,6 +27,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+          validate-wrappers: false
 
       - name: Build a testy
         working-directory: AI-FotoAsistent-S22-Ultra
