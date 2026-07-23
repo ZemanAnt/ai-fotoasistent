@@ -10,9 +10,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # V repu musí být právě jeden ZIP s projektem. Kdyby jich bylo víc,
+      # 'unzip -o *.zip' by druhý název považoval za soubor uvnitř archivu,
+      # nic by nerozbalil a build by spadl - proto radši selžeme hned a jasně.
       - name: Rozbalit projekt
         run: |
-          unzip -o *.zip
+          set -e
+          POCET=$(ls -1 *.zip 2>/dev/null | wc -l)
+          if [ "$POCET" -ne 1 ]; then
+            echo "Ocekavan presne jeden ZIP v korenu repa, nalezeno: $POCET"
+            ls -1 *.zip 2>/dev/null || true
+            exit 1
+          fi
+          ZIP=$(ls -1 *.zip)
+          echo "Rozbaluji: $ZIP"
+          unzip -o "$ZIP"
           rm -rf AI-FotoAsistent-S22-Ultra/gradle/wrapper
           rm -f AI-FotoAsistent-S22-Ultra/gradlew AI-FotoAsistent-S22-Ultra/gradlew.bat
           ls -la AI-FotoAsistent-S22-Ultra
@@ -33,8 +45,23 @@ jobs:
         working-directory: AI-FotoAsistent-S22-Ultra
         run: gradle testDebugUnitTest assembleDebug
 
+      # Ověří, že pravidla pro R8 drží. APK je nepodepsané a neukládá se -
+      # jde jen o kontrolu, že zmenšování kódu nerozbije CameraX ani ML Kit.
+      - name: Release build (kontrola R8)
+        working-directory: AI-FotoAsistent-S22-Ultra
+        run: gradle assembleRelease
+
       - name: Nahrat APK
         uses: actions/upload-artifact@v4
         with:
           name: AI-FotoAsistent-debug-apk
           path: AI-FotoAsistent-S22-Ultra/app/build/outputs/apk/debug/app-debug.apk
+
+      # Výsledky testů se hodí, když build spadne na assertu.
+      - name: Nahrat vysledky testu
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: AI-FotoAsistent-S22-Ultra/app/build/reports/tests/
+          if-no-files-found: ignore
