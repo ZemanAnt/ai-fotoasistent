@@ -2,8 +2,7 @@ name: Build Android APK from ZIP
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "AI-FotoAsistent-source.zip"
       - ".github/workflows/build.yml"
@@ -30,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Verify and extract source ZIP
+      - name: Extract and patch project
         shell: bash
         run: |
           set -euo pipefail
@@ -41,7 +40,25 @@ jobs:
           unzip -q "$SOURCE_ZIP" -d "$PROJECT_DIR"
           test -f "$PROJECT_DIR/settings.gradle.kts"
           test -f "$PROJECT_DIR/gradlew"
-          test -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar"
+
+          # Oprava nullable hodnot z ML Kit ve zdrojovém ZIPu v0.9.0.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("extracted-project/app/src/main/java/cz/hqsnet/aifoto/analysis/SceneAnalyzer.kt")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              "face.leftEyeOpenProbability.takeIf { it >= 0f }":
+                  "face.leftEyeOpenProbability?.takeIf { it >= 0f }",
+              "face.rightEyeOpenProbability.takeIf { it >= 0f }":
+                  "face.rightEyeOpenProbability?.takeIf { it >= 0f }",
+              "face.smilingProbability.takeIf { it >= 0f }":
+                  "face.smilingProbability?.takeIf { it >= 0f }",
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+          path.write_text(text, encoding="utf-8")
+          PY
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -54,7 +71,7 @@ jobs:
         with:
           packages: "platform-tools platforms;android-36 build-tools;36.0.0"
 
-      - name: Set up Gradle cache
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
@@ -68,8 +85,6 @@ jobs:
           ./scripts/verify-repository.sh
           ./gradlew --version
 
-      # APK se sestavuje jako první. Lint nebo testy už nemohou zabránit
-      # vytvoření instalačního souboru, pokud je samotná aplikace kompilovatelná.
       - name: Assemble debug APK
         id: assemble
         working-directory: ${{ env.PROJECT_DIR }}
@@ -89,7 +104,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew --no-daemon --console=plain --stacktrace :app:testDebugUnitTest \
+          ./gradlew --no-daemon --console=plain :app:testDebugUnitTest \
             2>&1 | tee "$RUNNER_TEMP/tests.log"
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
@@ -102,31 +117,25 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew --no-daemon --console=plain --stacktrace :app:lintDebug \
+          ./gradlew --no-daemon --console=plain :app:lintDebug \
             2>&1 | tee "$RUNNER_TEMP/lint.log"
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Prepare downloadable APK
+      - name: Prepare APK
         id: package
         if: steps.assemble.outputs.status == '0'
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-          OUTPUT_DIR="$RUNNER_TEMP/ai-foto-output"
-          OUTPUT_APK="$OUTPUT_DIR/AI-FotoAsistent-v0.9.0-debug.apk"
-          OUTPUT_SHA="$OUTPUT_DIR/AI-FotoAsistent-v0.9.0-debug.sha256"
-
-          test -f "$SOURCE_APK"
-          mkdir -p "$OUTPUT_DIR"
-          cp "$SOURCE_APK" "$OUTPUT_APK"
-          (
-            cd "$OUTPUT_DIR"
-            sha256sum "$(basename "$OUTPUT_APK")" > "$(basename "$OUTPUT_SHA")"
-          )
-          echo "directory=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+          output="$RUNNER_TEMP/ai-foto-output"
+          mkdir -p "$output"
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" \
+             "$output/AI-FotoAsistent-v0.9.0-debug.apk"
+          cd "$output"
+          sha256sum AI-FotoAsistent-v0.9.0-debug.apk > AI-FotoAsistent-v0.9.0-debug.sha256
+          echo "directory=$output" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         if: steps.assemble.outputs.status == '0'
@@ -140,7 +149,7 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-      - name: Create readable diagnostics
+      - name: Create readable build status
         if: always()
         shell: bash
         env:
@@ -149,14 +158,6 @@ jobs:
           LINT_STATUS: ${{ steps.lint.outputs.status }}
         run: |
           set -euo pipefail
-          DIAG_DIR="$RUNNER_TEMP/ai-foto-diagnostics"
-          mkdir -p "$DIAG_DIR"
-          cp "$RUNNER_TEMP/assemble.log" "$DIAG_DIR/assemble.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/tests.log" "$DIAG_DIR/tests.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/lint.log" "$DIAG_DIR/lint.log" 2>/dev/null || true
-          cp -R "$PROJECT_DIR/app/build/reports" "$DIAG_DIR/reports" 2>/dev/null || true
-          cp -R "$PROJECT_DIR/app/build/test-results" "$DIAG_DIR/test-results" 2>/dev/null || true
-
           {
             echo "# Poslední výsledek sestavení"
             echo
@@ -166,27 +167,12 @@ jobs:
             echo "- Unit testy: ${TEST_STATUS:-neprovedeno}"
             echo "- Android lint: ${LINT_STATUS:-neprovedeno}"
             echo
-            echo "## Konec protokolu assembleDebug"
+            echo "## Důležité řádky"
             echo
             echo '```text'
-            tail -n 180 "$RUNNER_TEMP/assemble.log" 2>/dev/null || echo "Protokol nebyl vytvořen."
+            grep -E "(^e: |^w: |FAILURE:|BUILD FAILED|BUILD SUCCESSFUL|FAILED$|error:)" \
+              "$RUNNER_TEMP/assemble.log" 2>/dev/null | tail -n 100 || true
             echo '```'
-            if [ -f "$RUNNER_TEMP/tests.log" ] && [ "${TEST_STATUS:-0}" != "0" ]; then
-              echo
-              echo "## Konec protokolu unit testů"
-              echo
-              echo '```text'
-              tail -n 120 "$RUNNER_TEMP/tests.log"
-              echo '```'
-            fi
-            if [ -f "$RUNNER_TEMP/lint.log" ] && [ "${LINT_STATUS:-0}" != "0" ]; then
-              echo
-              echo "## Konec protokolu Android lint"
-              echo
-              echo '```text'
-              tail -n 120 "$RUNNER_TEMP/lint.log"
-              echo '```'
-            fi
           } > BUILD_STATUS.md
 
       - name: Upload diagnostic logs
@@ -195,15 +181,16 @@ jobs:
         with:
           name: AI-FotoAsistent-build-diagnostics-${{ github.run_number }}
           path: |
-            ${{ runner.temp }}/ai-foto-diagnostics/
+            ${{ runner.temp }}/assemble.log
+            ${{ runner.temp }}/tests.log
+            ${{ runner.temp }}/lint.log
             BUILD_STATUS.md
-          if-no-files-found: warn
+            ${{ env.PROJECT_DIR }}/app/build/reports/
+            ${{ env.PROJECT_DIR }}/app/build/test-results/
+          if-no-files-found: ignore
           retention-days: 14
 
-      # Soubor se zapíše do repozitáře, aby byla první skutečná chyba čitelná
-      # i z telefonu bez hledání ve stovkách řádků Actions logu. Změna tohoto
-      # souboru nespouští další build díky filtru paths výše.
-      - name: Publish build status to repository
+      - name: Publish build status
         if: always()
         shell: bash
         run: |
@@ -211,13 +198,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add BUILD_STATUS.md
-          if git diff --cached --quiet; then
-            exit 0
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Android build diagnostics [skip ci]"
+            git push
           fi
-          git commit -m "Update Android build diagnostics [skip ci]"
-          git push
 
-      - name: Final build result
+      - name: Final result
         if: always()
         shell: bash
         env:
@@ -226,13 +212,9 @@ jobs:
           LINT_STATUS: ${{ steps.lint.outputs.status }}
         run: |
           if [ "${ASSEMBLE_STATUS:-1}" != "0" ]; then
-            echo "APK se nepodařilo zkompilovat. Podrobnosti jsou v BUILD_STATUS.md."
+            echo "APK se nepodařilo zkompilovat. Viz BUILD_STATUS.md."
             exit 1
           fi
-          if [ "${TEST_STATUS:-0}" != "0" ]; then
-            echo "::warning::APK vzniklo, ale některé unit testy selhaly."
-          fi
-          if [ "${LINT_STATUS:-0}" != "0" ]; then
-            echo "::warning::APK vzniklo, ale Android lint našel chyby."
-          fi
-          echo "APK bylo úspěšně vytvořeno a nahráno do Artifacts."
+          [ "${TEST_STATUS:-0}" = "0" ] || echo "::warning::Některé unit testy selhaly."
+          [ "${LINT_STATUS:-0}" = "0" ] || echo "::warning::Android lint našel chyby."
+          echo "APK bylo vytvořeno a nahráno do Artifacts."
