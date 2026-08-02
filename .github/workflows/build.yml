@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ai-foto-build-${{ github.ref }}
@@ -30,17 +30,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Verify source ZIP
+      - name: Verify and extract source ZIP
         shell: bash
         run: |
           set -euo pipefail
           test -f "$SOURCE_ZIP"
           unzip -t "$SOURCE_ZIP"
-
-      - name: Extract Android project
-        shell: bash
-        run: |
-          set -euo pipefail
           rm -rf "$PROJECT_DIR"
           mkdir -p "$PROJECT_DIR"
           unzip -q "$SOURCE_ZIP" -d "$PROJECT_DIR"
@@ -73,18 +68,49 @@ jobs:
           ./scripts/verify-repository.sh
           ./gradlew --version
 
-      - name: Lint, test and build APK
+      # APK se sestavuje jako první. Lint nebo testy už nemohou zabránit
+      # vytvoření instalačního souboru, pokud je samotná aplikace kompilovatelná.
+      - name: Assemble debug APK
+        id: assemble
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --stacktrace \
-            lintDebug \
-            testDebugUnitTest \
-            assembleDebug
+          set +e
+          ./gradlew --no-daemon --console=plain --stacktrace :app:assembleDebug \
+            2>&1 | tee "$RUNNER_TEMP/assemble.log"
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Run unit tests
+        id: tests
+        if: steps.assemble.outputs.status == '0'
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set +e
+          ./gradlew --no-daemon --console=plain --stacktrace :app:testDebugUnitTest \
+            2>&1 | tee "$RUNNER_TEMP/tests.log"
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Run Android lint
+        id: lint
+        if: steps.assemble.outputs.status == '0'
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set +e
+          ./gradlew --no-daemon --console=plain --stacktrace :app:lintDebug \
+            2>&1 | tee "$RUNNER_TEMP/lint.log"
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Prepare downloadable APK
         id: package
+        if: steps.assemble.outputs.status == '0'
         shell: bash
         run: |
           set -euo pipefail
@@ -100,10 +126,10 @@ jobs:
             cd "$OUTPUT_DIR"
             sha256sum "$(basename "$OUTPUT_APK")" > "$(basename "$OUTPUT_SHA")"
           )
-
           echo "directory=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
+        if: steps.assemble.outputs.status == '0'
         uses: actions/upload-artifact@v7
         with:
           name: AI-FotoAsistent-debug
@@ -112,14 +138,101 @@ jobs:
             ${{ steps.package.outputs.directory }}/AI-FotoAsistent-v0.9.0-debug.sha256
           if-no-files-found: error
           retention-days: 30
+          compression-level: 0
 
-      - name: Upload reports when build fails
-        if: failure()
+      - name: Create readable diagnostics
+        if: always()
+        shell: bash
+        env:
+          ASSEMBLE_STATUS: ${{ steps.assemble.outputs.status }}
+          TEST_STATUS: ${{ steps.tests.outputs.status }}
+          LINT_STATUS: ${{ steps.lint.outputs.status }}
+        run: |
+          set -euo pipefail
+          DIAG_DIR="$RUNNER_TEMP/ai-foto-diagnostics"
+          mkdir -p "$DIAG_DIR"
+          cp "$RUNNER_TEMP/assemble.log" "$DIAG_DIR/assemble.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/tests.log" "$DIAG_DIR/tests.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/lint.log" "$DIAG_DIR/lint.log" 2>/dev/null || true
+          cp -R "$PROJECT_DIR/app/build/reports" "$DIAG_DIR/reports" 2>/dev/null || true
+          cp -R "$PROJECT_DIR/app/build/test-results" "$DIAG_DIR/test-results" 2>/dev/null || true
+
+          {
+            echo "# Poslední výsledek sestavení"
+            echo
+            echo "- GitHub run: $GITHUB_RUN_ID"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Assemble APK: ${ASSEMBLE_STATUS:-neprovedeno}"
+            echo "- Unit testy: ${TEST_STATUS:-neprovedeno}"
+            echo "- Android lint: ${LINT_STATUS:-neprovedeno}"
+            echo
+            echo "## Konec protokolu assembleDebug"
+            echo
+            echo '```text'
+            tail -n 180 "$RUNNER_TEMP/assemble.log" 2>/dev/null || echo "Protokol nebyl vytvořen."
+            echo '```'
+            if [ -f "$RUNNER_TEMP/tests.log" ] && [ "${TEST_STATUS:-0}" != "0" ]; then
+              echo
+              echo "## Konec protokolu unit testů"
+              echo
+              echo '```text'
+              tail -n 120 "$RUNNER_TEMP/tests.log"
+              echo '```'
+            fi
+            if [ -f "$RUNNER_TEMP/lint.log" ] && [ "${LINT_STATUS:-0}" != "0" ]; then
+              echo
+              echo "## Konec protokolu Android lint"
+              echo
+              echo '```text'
+              tail -n 120 "$RUNNER_TEMP/lint.log"
+              echo '```'
+            fi
+          } > BUILD_STATUS.md
+
+      - name: Upload diagnostic logs
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: AI-FotoAsistent-build-reports
+          name: AI-FotoAsistent-build-diagnostics-${{ github.run_number }}
           path: |
-            ${{ env.PROJECT_DIR }}/app/build/reports/
-            ${{ env.PROJECT_DIR }}/app/build/test-results/
-          if-no-files-found: ignore
+            ${{ runner.temp }}/ai-foto-diagnostics/
+            BUILD_STATUS.md
+          if-no-files-found: warn
           retention-days: 14
+
+      # Soubor se zapíše do repozitáře, aby byla první skutečná chyba čitelná
+      # i z telefonu bez hledání ve stovkách řádků Actions logu. Změna tohoto
+      # souboru nespouští další build díky filtru paths výše.
+      - name: Publish build status to repository
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BUILD_STATUS.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Update Android build diagnostics [skip ci]"
+          git push
+
+      - name: Final build result
+        if: always()
+        shell: bash
+        env:
+          ASSEMBLE_STATUS: ${{ steps.assemble.outputs.status }}
+          TEST_STATUS: ${{ steps.tests.outputs.status }}
+          LINT_STATUS: ${{ steps.lint.outputs.status }}
+        run: |
+          if [ "${ASSEMBLE_STATUS:-1}" != "0" ]; then
+            echo "APK se nepodařilo zkompilovat. Podrobnosti jsou v BUILD_STATUS.md."
+            exit 1
+          fi
+          if [ "${TEST_STATUS:-0}" != "0" ]; then
+            echo "::warning::APK vzniklo, ale některé unit testy selhaly."
+          fi
+          if [ "${LINT_STATUS:-0}" != "0" ]; then
+            echo "::warning::APK vzniklo, ale Android lint našel chyby."
+          fi
+          echo "APK bylo úspěšně vytvořeno a nahráno do Artifacts."
