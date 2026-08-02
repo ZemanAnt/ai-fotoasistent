@@ -41,12 +41,13 @@ jobs:
           test -f "$PROJECT_DIR/settings.gradle.kts"
           test -f "$PROJECT_DIR/gradlew"
 
-          # Oprava nullable hodnot z ML Kit ve zdrojovém ZIPu v0.9.0.
+          # Kompatibilitní opravy zdrojového ZIPu v0.9.0.
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("extracted-project/app/src/main/java/cz/hqsnet/aifoto/analysis/SceneAnalyzer.kt")
-          text = path.read_text(encoding="utf-8")
+          root = Path("extracted-project/app/src/main/java")
+          analyzer = root / "cz/hqsnet/aifoto/analysis/SceneAnalyzer.kt"
+          text = analyzer.read_text(encoding="utf-8")
           replacements = {
               "face.leftEyeOpenProbability.takeIf { it >= 0f }":
                   "face.leftEyeOpenProbability?.takeIf { it >= 0f }",
@@ -57,7 +58,20 @@ jobs:
           }
           for old, new in replacements.items():
               text = text.replace(old, new)
-          path.write_text(text, encoding="utf-8")
+          analyzer.write_text(text, encoding="utf-8")
+
+          # CameraX používá AndroidX opt-in anotace, nikoli Kotlin RequiresOptIn.
+          for path in root.rglob("*.kt"):
+              text = path.read_text(encoding="utf-8")
+              text = text.replace(
+                  "@OptIn(ExperimentalCamera2Interop::class)",
+                  "@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)",
+              )
+              text = text.replace(
+                  "@OptIn(ExperimentalGetImage::class)",
+                  "@androidx.annotation.OptIn(ExperimentalGetImage::class)",
+              )
+              path.write_text(text, encoding="utf-8")
           PY
 
       - name: Set up JDK 17
@@ -170,8 +184,10 @@ jobs:
             echo "## Důležité řádky"
             echo
             echo '```text'
-            grep -E "(^e: |^w: |FAILURE:|BUILD FAILED|BUILD SUCCESSFUL|FAILED$|error:)" \
-              "$RUNNER_TEMP/assemble.log" 2>/dev/null | tail -n 100 || true
+            for log in "$RUNNER_TEMP/assemble.log" "$RUNNER_TEMP/tests.log" "$RUNNER_TEMP/lint.log"; do
+              grep -E "(^e: |^w: |FAILURE:|BUILD FAILED|BUILD SUCCESSFUL|FAILED$|error:)" \
+                "$log" 2>/dev/null | tail -n 100 || true
+            done
             echo '```'
           } > BUILD_STATUS.md
 
@@ -215,6 +231,12 @@ jobs:
             echo "APK se nepodařilo zkompilovat. Viz BUILD_STATUS.md."
             exit 1
           fi
-          [ "${TEST_STATUS:-0}" = "0" ] || echo "::warning::Některé unit testy selhaly."
-          [ "${LINT_STATUS:-0}" = "0" ] || echo "::warning::Android lint našel chyby."
-          echo "APK bylo vytvořeno a nahráno do Artifacts."
+          if [ "${TEST_STATUS:-1}" != "0" ]; then
+            echo "Unit testy selhaly. Viz BUILD_STATUS.md."
+            exit 1
+          fi
+          if [ "${LINT_STATUS:-1}" != "0" ]; then
+            echo "Android lint selhal. Viz BUILD_STATUS.md."
+            exit 1
+          fi
+          echo "APK, unit testy i Android lint prošly úspěšně."
