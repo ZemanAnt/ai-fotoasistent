@@ -1,23 +1,22 @@
 # Poslední výsledek sestavení v0.9.2
 
-- GitHub run: 30847097373
-- Commit: 17419ce42181b5b5836a136a76ed4444d1b3fbfc
-- Assemble APK: 0
-- Unit testy: 1
+- GitHub run: 30849359946
+- Validační commit: e4b21b0b37256762aa4670fe9f49ccf6bc1e1ddb
+- Assemble debug APK: 0
+- Unit testy: 0
 - Android lint: 0
+- Výsledek: SUCCESS
+- Artefakt: `AI-FotoAsistent-v0.9.2-debug`
 
-## Důležité řádky
+## Ověřené kroky
 
 ```text
-w: file:///home/runner/work/ai-fotoasistent/ai-fotoasistent/extracted-project/app/build.gradle.kts:79:9: 'jvmTarget: String' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
-w: file:///home/runner/work/ai-fotoasistent/ai-fotoasistent/extracted-project/app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt:1789:39 'static field TAG_ISO_SPEED_RATINGS: String' is deprecated. Deprecated in Java.
-w: file:///home/runner/work/ai-fotoasistent/ai-fotoasistent/extracted-project/app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt:2286:27 'static field TAG_ISO_SPEED_RATINGS: String' is deprecated. Deprecated in Java.
-w: file:///home/runner/work/ai-fotoasistent/ai-fotoasistent/extracted-project/app/src/main/java/cz/hqsnet/aifoto/ui/CameraPreview.kt:153:18 'fun setTargetAspectRatio(p0: Int): Preview.Builder' is deprecated. Deprecated in Java.
-w: file:///home/runner/work/ai-fotoasistent/ai-fotoasistent/extracted-project/app/src/main/java/cz/hqsnet/aifoto/ui/CameraPreview.kt:187:18 'fun setTargetAspectRatio(p0: Int): ImageAnalysis.Builder' is deprecated. Deprecated in Java.
-BUILD SUCCESSFUL in 2m 31s
-PostProcessTest > extremelyDarkSceneGetsLifted FAILED
-> Task :app:testDebugUnitTest FAILED
-FAILURE: Build failed with an exception.
-BUILD FAILED in 19s
-BUILD SUCCESSFUL in 52s
+Apply Field and Night Calibration patches: SUCCESS
+Assemble debug APK: SUCCESS
+Run unit tests: SUCCESS
+Run Android lint: SUCCESS
+Prepare artifact: SUCCESS
+Upload APK: SUCCESS
 ```
+
+Finální validace proběhla v pull-request workflow `Validate Android v0.9.2`. Validační PR byl po úspěšném dokončení uzavřen bez sloučení; obsahoval pouze spouštěcí soubor pro CI.
