@@ -23,13 +23,13 @@ jobs:
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Extract and patch project
+      - name: Extract and apply Field Calibration v0.9.1
         shell: bash
         run: |
           set -euo pipefail
@@ -41,38 +41,46 @@ jobs:
           test -f "$PROJECT_DIR/settings.gradle.kts"
           test -f "$PROJECT_DIR/gradlew"
 
-          # Kompatibilitní opravy zdrojového ZIPu v0.9.0.
-          python3 - <<'PY'
+          # Opravy původního zdrojového ZIPu v0.9.0, na které navazuje patch.
+          python3 - <<'PYFIX'
           from pathlib import Path
-
           root = Path("extracted-project/app/src/main/java")
           analyzer = root / "cz/hqsnet/aifoto/analysis/SceneAnalyzer.kt"
           text = analyzer.read_text(encoding="utf-8")
-          replacements = {
-              "face.leftEyeOpenProbability.takeIf { it >= 0f }":
-                  "face.leftEyeOpenProbability?.takeIf { it >= 0f }",
-              "face.rightEyeOpenProbability.takeIf { it >= 0f }":
-                  "face.rightEyeOpenProbability?.takeIf { it >= 0f }",
-              "face.smilingProbability.takeIf { it >= 0f }":
-                  "face.smilingProbability?.takeIf { it >= 0f }",
-          }
-          for old, new in replacements.items():
-              text = text.replace(old, new)
+          text = text.replace(
+              "face.leftEyeOpenProbability.takeIf { it >= 0f }",
+              "face.leftEyeOpenProbability?.takeIf { it >= 0f }",
+          ).replace(
+              "face.rightEyeOpenProbability.takeIf { it >= 0f }",
+              "face.rightEyeOpenProbability?.takeIf { it >= 0f }",
+          ).replace(
+              "face.smilingProbability.takeIf { it >= 0f }",
+              "face.smilingProbability?.takeIf { it >= 0f }",
+          )
           analyzer.write_text(text, encoding="utf-8")
-
-          # CameraX používá AndroidX opt-in anotace, nikoli Kotlin RequiresOptIn.
           for path in root.rglob("*.kt"):
               text = path.read_text(encoding="utf-8")
               text = text.replace(
                   "@OptIn(ExperimentalCamera2Interop::class)",
                   "@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)",
-              )
-              text = text.replace(
+              ).replace(
                   "@OptIn(ExperimentalGetImage::class)",
                   "@androidx.annotation.OptIn(ExperimentalGetImage::class)",
               )
               path.write_text(text, encoding="utf-8")
-          PY
+          PYFIX
+
+          # Přesný zdrojový patch Field Calibration v0.9.1 je uložen po
+          # částech jako text, aby repozitář mohl dál obsahovat původní ZIP.
+          cat .github/patches/v091/part-* | base64 -d | gzip -d > "$RUNNER_TEMP/v091.patch"
+          (
+            cd "$PROJECT_DIR"
+            git init -q
+            git apply --check "$RUNNER_TEMP/v091.patch"
+            git apply "$RUNNER_TEMP/v091.patch"
+          )
+          grep -q 'versionName = "0.9.1"' "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/src/main/java/cz/hqsnet/aifoto/calibration/FieldCalibration.kt"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -146,19 +154,19 @@ jobs:
           output="$RUNNER_TEMP/ai-foto-output"
           mkdir -p "$output"
           cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" \
-             "$output/AI-FotoAsistent-v0.9.0-debug.apk"
+             "$output/AI-FotoAsistent-v0.9.1-debug.apk"
           cd "$output"
-          sha256sum AI-FotoAsistent-v0.9.0-debug.apk > AI-FotoAsistent-v0.9.0-debug.sha256
+          sha256sum AI-FotoAsistent-v0.9.1-debug.apk > AI-FotoAsistent-v0.9.1-debug.sha256
           echo "directory=$output" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         if: steps.assemble.outputs.status == '0'
         uses: actions/upload-artifact@v7
         with:
-          name: AI-FotoAsistent-debug
+          name: AI-FotoAsistent-v0.9.1-debug
           path: |
-            ${{ steps.package.outputs.directory }}/AI-FotoAsistent-v0.9.0-debug.apk
-            ${{ steps.package.outputs.directory }}/AI-FotoAsistent-v0.9.0-debug.sha256
+            ${{ steps.package.outputs.directory }}/AI-FotoAsistent-v0.9.1-debug.apk
+            ${{ steps.package.outputs.directory }}/AI-FotoAsistent-v0.9.1-debug.sha256
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
@@ -173,7 +181,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "# Poslední výsledek sestavení"
+            echo "# Poslední výsledek sestavení v0.9.1"
             echo
             echo "- GitHub run: $GITHUB_RUN_ID"
             echo "- Commit: $GITHUB_SHA"
@@ -186,7 +194,7 @@ jobs:
             echo '```text'
             for log in "$RUNNER_TEMP/assemble.log" "$RUNNER_TEMP/tests.log" "$RUNNER_TEMP/lint.log"; do
               grep -E "(^e: |^w: |FAILURE:|BUILD FAILED|BUILD SUCCESSFUL|FAILED$|error:)" \
-                "$log" 2>/dev/null | tail -n 100 || true
+                "$log" 2>/dev/null | tail -n 120 || true
             done
             echo '```'
           } > BUILD_STATUS.md
@@ -195,7 +203,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: AI-FotoAsistent-build-diagnostics-${{ github.run_number }}
+          name: AI-FotoAsistent-v0.9.1-build-diagnostics-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/assemble.log
             ${{ runner.temp }}/tests.log
@@ -215,7 +223,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add BUILD_STATUS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Update Android build diagnostics [skip ci]"
+            git commit -m "Update v0.9.1 build diagnostics [skip ci]"
             git push
           fi
 
@@ -227,16 +235,7 @@ jobs:
           TEST_STATUS: ${{ steps.tests.outputs.status }}
           LINT_STATUS: ${{ steps.lint.outputs.status }}
         run: |
-          if [ "${ASSEMBLE_STATUS:-1}" != "0" ]; then
-            echo "APK se nepodařilo zkompilovat. Viz BUILD_STATUS.md."
-            exit 1
-          fi
-          if [ "${TEST_STATUS:-1}" != "0" ]; then
-            echo "Unit testy selhaly. Viz BUILD_STATUS.md."
-            exit 1
-          fi
-          if [ "${LINT_STATUS:-1}" != "0" ]; then
-            echo "Android lint selhal. Viz BUILD_STATUS.md."
-            exit 1
-          fi
-          echo "APK, unit testy i Android lint prošly úspěšně."
+          test "${ASSEMBLE_STATUS:-1}" = "0" || { echo "APK se nepodařilo zkompilovat."; exit 1; }
+          test "${TEST_STATUS:-1}" = "0" || { echo "Unit testy selhaly."; exit 1; }
+          test "${LINT_STATUS:-1}" = "0" || { echo "Android lint selhal."; exit 1; }
+          echo "v0.9.1: APK, unit testy i Android lint prošly úspěšně."
