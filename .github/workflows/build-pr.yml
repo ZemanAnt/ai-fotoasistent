@@ -1,0 +1,161 @@
+name: Validate Android v0.9.2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "AI-FotoAsistent-source.zip"
+      - ".github/workflows/build-pr.yml"
+      - ".github/patches/v091/**"
+      - ".github/patches/v092/**"
+      - ".github/patches/v092fix/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-foto-v092-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_ZIP: AI-FotoAsistent-source.zip
+  PROJECT_DIR: extracted-project
+
+jobs:
+  validate:
+    name: Build, test and lint v0.9.2
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Extract base source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$SOURCE_ZIP"
+          unzip -t "$SOURCE_ZIP"
+          rm -rf "$PROJECT_DIR"
+          mkdir -p "$PROJECT_DIR"
+          unzip -q "$SOURCE_ZIP" -d "$PROJECT_DIR"
+          test -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f "$PROJECT_DIR/gradlew"
+
+      - name: Apply v0.9.0 compatibility fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          root = Path("extracted-project/app/src/main/java")
+          analyzer = root / "cz/hqsnet/aifoto/analysis/SceneAnalyzer.kt"
+          text = analyzer.read_text(encoding="utf-8")
+          text = text.replace(
+              "face.leftEyeOpenProbability.takeIf { it >= 0f }",
+              "face.leftEyeOpenProbability?.takeIf { it >= 0f }",
+          ).replace(
+              "face.rightEyeOpenProbability.takeIf { it >= 0f }",
+              "face.rightEyeOpenProbability?.takeIf { it >= 0f }",
+          ).replace(
+              "face.smilingProbability.takeIf { it >= 0f }",
+              "face.smilingProbability?.takeIf { it >= 0f }",
+          )
+          analyzer.write_text(text, encoding="utf-8")
+          for path in root.rglob("*.kt"):
+              text = path.read_text(encoding="utf-8")
+              text = text.replace(
+                  "@OptIn(ExperimentalCamera2Interop::class)",
+                  "@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)",
+              ).replace(
+                  "@OptIn(ExperimentalGetImage::class)",
+                  "@androidx.annotation.OptIn(ExperimentalGetImage::class)",
+              )
+              path.write_text(text, encoding="utf-8")
+          PYFIX
+
+      - name: Apply Field and Night Calibration patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          decode_patch() {
+            local version="$1"
+            cat ".github/patches/${version}/"part-* | base64 -d | gzip -d > "$RUNNER_TEMP/${version}.patch"
+          }
+          decode_patch v091
+          decode_patch v092
+          decode_patch v092fix
+          cd "$PROJECT_DIR"
+          git init -q
+          git apply --check "$RUNNER_TEMP/v091.patch"
+          git apply "$RUNNER_TEMP/v091.patch"
+          git apply --check --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v092.patch"
+          git apply --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v092.patch"
+          git apply --check "$RUNNER_TEMP/v092fix.patch"
+          git apply "$RUNNER_TEMP/v092fix.patch"
+          grep -q 'versionName = "0.9.2"' app/build.gradle.kts
+          grep -q 'sourceValue <= 8' app/src/main/java/cz/hqsnet/aifoto/capture/PostProcess.kt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK 36
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Verify repository
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          chmod +x gradlew scripts/verify-repository.sh
+          ./scripts/verify-repository.sh
+          ./gradlew --version
+
+      - name: Assemble debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew --no-daemon --console=plain :app:assembleDebug
+
+      - name: Run unit tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew --no-daemon --console=plain :app:testDebugUnitTest
+
+      - name: Run Android lint
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew --no-daemon --console=plain :app:lintDebug
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p release-output
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" release-output/AI-FotoAsistent-v0.9.2-debug.apk
+          cd release-output
+          sha256sum AI-FotoAsistent-v0.9.2-debug.apk > AI-FotoAsistent-v0.9.2-debug.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: AI-FotoAsistent-v0.9.2-debug
+          path: release-output/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AI-FotoAsistent-v0.9.2-pr-diagnostics
+          path: |
+            ${{ env.PROJECT_DIR }}/app/build/reports/
+            ${{ env.PROJECT_DIR }}/app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
