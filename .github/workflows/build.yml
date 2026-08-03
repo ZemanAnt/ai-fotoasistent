@@ -8,6 +8,7 @@ on:
       - ".github/workflows/build.yml"
       - ".github/patches/v091/**"
       - ".github/patches/v092/**"
+      - ".github/patches/v092fix/**"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +32,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Extract and apply v0.9.1 + v0.9.2
+      - name: Extract and apply Night Calibration patches
         shell: bash
         run: |
           set -euo pipefail
@@ -43,7 +44,6 @@ jobs:
           test -f "$PROJECT_DIR/settings.gradle.kts"
           test -f "$PROJECT_DIR/gradlew"
 
-          # Kompatibilitní opravy původního ZIPu v0.9.0.
           python3 - <<'PYFIX'
           from pathlib import Path
           root = Path("extracted-project/app/src/main/java")
@@ -72,27 +72,26 @@ jobs:
               path.write_text(text, encoding="utf-8")
           PYFIX
 
-          apply_patch() {
+          decode_patch() {
             local version="$1"
             local output="$RUNNER_TEMP/${version}.patch"
             cat ".github/patches/${version}/"part-* | base64 -d | gzip -d > "$output"
-            (
-              cd "$PROJECT_DIR"
-              git init -q
-              if [ "$version" = "v092" ]; then
-                # README a CHANGELOG se v lokálním v0.9.1 balíku lišily jen
-                # dokumentačně. Kódový patch je proto aplikuje nezávisle.
-                git apply --check --exclude=README.md --exclude=CHANGELOG.md "$output"
-                git apply --exclude=README.md --exclude=CHANGELOG.md "$output"
-              else
-                git apply --check "$output"
-                git apply "$output"
-              fi
-            )
           }
 
-          apply_patch v091
-          apply_patch v092
+          decode_patch v091
+          decode_patch v092
+          decode_patch v092fix
+
+          (
+            cd "$PROJECT_DIR"
+            git init -q
+            git apply --check "$RUNNER_TEMP/v091.patch"
+            git apply "$RUNNER_TEMP/v091.patch"
+            git apply --check --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v092.patch"
+            git apply --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v092.patch"
+            git apply --check "$RUNNER_TEMP/v092fix.patch"
+            git apply "$RUNNER_TEMP/v092fix.patch"
+          )
 
           python3 - <<'PYDOC'
           from pathlib import Path
@@ -101,19 +100,26 @@ jobs:
           text = readme.read_text(encoding="utf-8")
           text = text.replace("v0.9.1", "v0.9.2").replace("Verze 0.9.1", "Verze 0.9.2")
           readme.write_text(text, encoding="utf-8")
-
           changelog = root / "CHANGELOG.md"
           text = changelog.read_text(encoding="utf-8")
           if "## 0.9.2" not in text:
-              text = "# Changelog\n\n## 0.9.2 – Night Calibration Fix\n\n- automatický profil Noční interiér pro tmavé statické scény,\n- lokální tone mapping se zachováním skutečné černé,\n- silnější odšumění před zesvětlením,\n- přísnější RETAKE při vysokém ISO a hlubokých stínech,\n- porovnání originálu a AI kopie a JPEG kvalita 95.\n\n" + text.removeprefix("# Changelog\n\n")
+              section = """# Changelog
+
+## 0.9.2 – Night Calibration Fix
+
+- automatický profil Noční interiér pro tmavé statické scény,
+- lokální tone mapping se zachováním skutečné černé,
+- odšumění před zesvětlením a JPEG kvalita 95,
+- přísnější RETAKE při vysokém ISO a hlubokých stínech.
+
+"""
+              text = section + text.removeprefix("# Changelog\n\n")
           changelog.write_text(text, encoding="utf-8")
           PYDOC
 
           grep -q 'versionName = "0.9.2"' "$PROJECT_DIR/app/build.gradle.kts"
-          grep -q 'NightCaptureMode.INTERIOR' \
-            "$PROJECT_DIR/app/src/main/java/cz/hqsnet/aifoto/capture/NightPlanner.kt"
-          grep -q 'HIGH_ISO_SHADOW_LIFT' \
-            "$PROJECT_DIR/app/src/main/java/cz/hqsnet/aifoto/calibration/FieldCalibration.kt"
+          grep -q 'NightCaptureMode.INTERIOR' "$PROJECT_DIR/app/src/main/java/cz/hqsnet/aifoto/capture/NightPlanner.kt"
+          grep -q 'sourceValue <= 8' "$PROJECT_DIR/app/src/main/java/cz/hqsnet/aifoto/capture/PostProcess.kt"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -146,8 +152,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew --no-daemon --console=plain --stacktrace :app:assembleDebug \
-            2>&1 | tee "$RUNNER_TEMP/assemble.log"
+          ./gradlew --no-daemon --console=plain --stacktrace :app:assembleDebug 2>&1 | tee "$RUNNER_TEMP/assemble.log"
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
@@ -159,8 +164,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew --no-daemon --console=plain :app:testDebugUnitTest \
-            2>&1 | tee "$RUNNER_TEMP/tests.log"
+          ./gradlew --no-daemon --console=plain :app:testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/tests.log"
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
@@ -172,8 +176,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew --no-daemon --console=plain :app:lintDebug \
-            2>&1 | tee "$RUNNER_TEMP/lint.log"
+          ./gradlew --no-daemon --console=plain :app:lintDebug 2>&1 | tee "$RUNNER_TEMP/lint.log"
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
@@ -186,8 +189,7 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/ai-foto-output"
           mkdir -p "$output"
-          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" \
-             "$output/AI-FotoAsistent-v0.9.2-debug.apk"
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" "$output/AI-FotoAsistent-v0.9.2-debug.apk"
           cd "$output"
           sha256sum AI-FotoAsistent-v0.9.2-debug.apk > AI-FotoAsistent-v0.9.2-debug.sha256
           echo "directory=$output" >> "$GITHUB_OUTPUT"
@@ -226,8 +228,7 @@ jobs:
             echo
             echo '```text'
             for log in "$RUNNER_TEMP/assemble.log" "$RUNNER_TEMP/tests.log" "$RUNNER_TEMP/lint.log"; do
-              grep -E "(^e: |^w: |FAILURE:|BUILD FAILED|BUILD SUCCESSFUL|FAILED$|error:)" \
-                "$log" 2>/dev/null | tail -n 140 || true
+              grep -E "(^e: |^w: |FAILURE:|BUILD FAILED|BUILD SUCCESSFUL|FAILED$|error:)" "$log" 2>/dev/null | tail -n 140 || true
             done
             echo '```'
           } > BUILD_STATUS.md
