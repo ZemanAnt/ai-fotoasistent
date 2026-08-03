@@ -79,13 +79,35 @@ jobs:
             (
               cd "$PROJECT_DIR"
               git init -q
-              git apply --check "$output"
-              git apply "$output"
+              if [ "$version" = "v092" ]; then
+                # README a CHANGELOG se v lokálním v0.9.1 balíku lišily jen
+                # dokumentačně. Kódový patch je proto aplikuje nezávisle.
+                git apply --check --exclude=README.md --exclude=CHANGELOG.md "$output"
+                git apply --exclude=README.md --exclude=CHANGELOG.md "$output"
+              else
+                git apply --check "$output"
+                git apply "$output"
+              fi
             )
           }
 
           apply_patch v091
           apply_patch v092
+
+          python3 - <<'PYDOC'
+          from pathlib import Path
+          root = Path("extracted-project")
+          readme = root / "README.md"
+          text = readme.read_text(encoding="utf-8")
+          text = text.replace("v0.9.1", "v0.9.2").replace("Verze 0.9.1", "Verze 0.9.2")
+          readme.write_text(text, encoding="utf-8")
+
+          changelog = root / "CHANGELOG.md"
+          text = changelog.read_text(encoding="utf-8")
+          if "## 0.9.2" not in text:
+              text = "# Changelog\n\n## 0.9.2 – Night Calibration Fix\n\n- automatický profil Noční interiér pro tmavé statické scény,\n- lokální tone mapping se zachováním skutečné černé,\n- silnější odšumění před zesvětlením,\n- přísnější RETAKE při vysokém ISO a hlubokých stínech,\n- porovnání originálu a AI kopie a JPEG kvalita 95.\n\n" + text.removeprefix("# Changelog\n\n")
+          changelog.write_text(text, encoding="utf-8")
+          PYDOC
 
           grep -q 'versionName = "0.9.2"' "$PROJECT_DIR/app/build.gradle.kts"
           grep -q 'NightCaptureMode.INTERIOR' \
