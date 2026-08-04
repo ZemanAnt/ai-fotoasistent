@@ -10,6 +10,7 @@ on:
       - ".github/patches/v092/**"
       - ".github/patches/v092fix/**"
       - ".github/patches/v093/**"
+      - ".github/patches/v093fix/**"
       - ".github/validation/v093/**"
 
 permissions:
@@ -77,6 +78,7 @@ jobs:
           decode_patch v092
           decode_patch v092fix
           decode_patch v093
+          decode_patch v093fix
           cd "$PROJECT_DIR"
           git init -q
           git apply --check "$RUNNER_TEMP/v091.patch"
@@ -87,9 +89,12 @@ jobs:
           git apply "$RUNNER_TEMP/v092fix.patch"
           git apply --check --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v093.patch"
           git apply --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v093.patch"
+          git apply --check "$RUNNER_TEMP/v093fix.patch"
+          git apply "$RUNNER_TEMP/v093fix.patch"
           grep -q 'versionName = "0.9.3"' app/build.gradle.kts
           grep -q 'capturePending' app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt
           grep -q 'sampleForExposure' app/src/main/java/cz/hqsnet/aifoto/capture/NightMotionTracker.kt
+          test -f app/src/main/java/cz/hqsnet/aifoto/capture/NightMotionWindow.kt
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
