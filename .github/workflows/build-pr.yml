@@ -85,8 +85,8 @@ jobs:
           git apply --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v092.patch"
           git apply --check "$RUNNER_TEMP/v092fix.patch"
           git apply "$RUNNER_TEMP/v092fix.patch"
-          git apply --check "$RUNNER_TEMP/v093.patch"
-          git apply "$RUNNER_TEMP/v093.patch"
+          git apply --check --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v093.patch"
+          git apply --exclude=README.md --exclude=CHANGELOG.md "$RUNNER_TEMP/v093.patch"
           grep -q 'versionName = "0.9.3"' app/build.gradle.kts
           grep -q 'capturePending' app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt
           grep -q 'sampleForExposure' app/src/main/java/cz/hqsnet/aifoto/capture/NightMotionTracker.kt
