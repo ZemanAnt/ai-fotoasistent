@@ -1,0 +1,2 @@
+Validate AI FotoAsistent v0.9.4 Long Exposure & UI Refresh.
+Patch SHA-256: 25a360bee6c8f47bc8e3761f6c0f5148773b097022605c18ce8cd15315ae6369
