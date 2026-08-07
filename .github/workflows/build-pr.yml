@@ -103,7 +103,7 @@ jobs:
 
           grep -q 'versionName = "0.9.4"' app/build.gradle.kts
           grep -q 'fun captureCurrentMode' app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt
-          grep -q 'class LongExposurePlanner' app/src/main/java/cz/hqsnet/aifoto/capture/LongExposurePlanner.kt
+          grep -q 'object LongExposurePlanner' app/src/main/java/cz/hqsnet/aifoto/capture/LongExposurePlanner.kt
           grep -q 'class LongExposureStacker' app/src/main/java/cz/hqsnet/aifoto/capture/LongExposureStacker.kt
           test -f app/src/test/java/cz/hqsnet/aifoto/capture/LongExposurePlannerTest.kt
 
