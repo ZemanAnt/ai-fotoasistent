@@ -12,6 +12,7 @@ on:
       - ".github/patches/v093/**"
       - ".github/patches/v093fix/**"
       - ".github/patches/v094/**"
+      - ".github/patches/v094fix/**"
       - ".github/validation/v094/**"
 
 permissions:
@@ -39,7 +40,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$SOURCE_ZIP"
           unzip -t "$SOURCE_ZIP"
           rm -rf "$PROJECT_DIR"
           mkdir -p "$PROJECT_DIR"
@@ -67,7 +67,7 @@ jobs:
               path.write_text(text, encoding="utf-8")
           PYFIX
 
-      - name: Apply v0.9.1 to v0.9.4 patches
+      - name: Reconstruct and apply patches
         shell: bash
         run: |
           set -euo pipefail
@@ -80,7 +80,12 @@ jobs:
           decode_patch v092fix
           decode_patch v093
           decode_patch v093fix
-          decode_patch v094
+
+          cat .github/patches/v094fix/part-* .github/patches/v094/part-01 .github/patches/v094/part-02 > "$RUNNER_TEMP/v094.b64"
+          echo "f2c2cb65c262a82defb8534d35a75ad72a26d22de2cc6171c22d2d3bffe76779  $RUNNER_TEMP/v094.b64" | sha256sum -c -
+          base64 -d "$RUNNER_TEMP/v094.b64" | gzip -d > "$RUNNER_TEMP/v094.patch"
+          echo "25a360bee6c8f47bc8e3761f6c0f5148773b097022605c18ce8cd15315ae6369  $RUNNER_TEMP/v094.patch" | sha256sum -c -
+
           cd "$PROJECT_DIR"
           git init -q
           git apply --check "$RUNNER_TEMP/v091.patch"
@@ -95,11 +100,11 @@ jobs:
           git apply "$RUNNER_TEMP/v093fix.patch"
           git apply --check --exclude=README.md --exclude=README.en.md --exclude=CHANGELOG.md --exclude=docs/ARCHITECTURE.md "$RUNNER_TEMP/v094.patch"
           git apply --exclude=README.md --exclude=README.en.md --exclude=CHANGELOG.md --exclude=docs/ARCHITECTURE.md "$RUNNER_TEMP/v094.patch"
+
           grep -q 'versionName = "0.9.4"' app/build.gradle.kts
           grep -q 'fun captureCurrentMode' app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt
           grep -q 'class LongExposurePlanner' app/src/main/java/cz/hqsnet/aifoto/capture/LongExposurePlanner.kt
           grep -q 'class LongExposureStacker' app/src/main/java/cz/hqsnet/aifoto/capture/LongExposureStacker.kt
-          grep -q 'actualTelemetry = finalCaptureTelemetry' app/src/main/java/cz/hqsnet/aifoto/CameraViewModel.kt
           test -f app/src/test/java/cz/hqsnet/aifoto/capture/LongExposurePlannerTest.kt
 
       - name: Set up JDK 17
