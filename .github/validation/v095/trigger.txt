@@ -1,0 +1,3 @@
+Validate AI FotoAsistent v0.9.5 Long Exposure Calibration & Camera UX Polish.
+Patch base64 SHA-256: a88c1b3feee0372e4b3f77c504f537597e86c4ecf444ef8e5029f5039c1d88c9
+Patch SHA-256: f86537899ff108e7a8093ef0735a03c732d51805fe533948a342ef76f6dbb27f
